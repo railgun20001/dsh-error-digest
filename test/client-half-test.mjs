@@ -555,6 +555,25 @@ test('忽略表里的脏数据不会让面板崩', () => {
   assert.equal(findAll(tree, 'error-digest-ignored-toggle').length, 1)
 })
 
+test('样式表：花括号配平、只用主题令牌、不写字面色值', () => {
+  const { renderPanel } = mountClientHalf({ services: { sessions: { list: listSource(sampleListState()) } } })
+  const tree = renderPanel()
+  const styleNode = (tree.children ?? []).find((child) => child?.type === 'style')
+  assert.ok(styleNode !== undefined, '面板没有渲染 <style>')
+  const css = textOf(styleNode)
+  assert.ok(css.length > 1000, '样式表内容异常')
+  const opens = (css.match(/\{/g) ?? []).length
+  const closes = (css.match(/\}/g) ?? []).length
+  assert.equal(opens, closes, '样式表花括号不配平')
+  // 字面色值是红线：插件必须继承宿主主题令牌，否则明暗主题下会错色
+  assert.doesNotMatch(css, /#[0-9a-fA-F]{3,8}\b/)
+  assert.doesNotMatch(css, /\b(rgba?|hsla?)\(/)
+  // 三个动作与已忽略区块的类名必须在场
+  for (const className of ['.ded-act-primary', '.ded-act-secondary', '.ded-act-quiet', '.ded-ignored-row', '.ded-ignored-toggle']) {
+    assert.ok(css.includes(className), `样式表缺少 ${className}`)
+  }
+})
+
 test('uiWorkspace 缺席时按钮退化为复制提示词，不抛错', () => {
   const { ctx, exportsObject } = mountClientHalf({
     services: { sessions: { list: listSource(sampleListState()) } },
