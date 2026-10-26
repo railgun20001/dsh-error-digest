@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Error Digest",
+    "description": "Collects tool failures, failed turns, and model retries from conversations, merges them by frequency, and starts an analysis or prevention conversation from any entry."
+  }
+}

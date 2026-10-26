@@ -1,0 +1,12 @@
+# dsh-error-digest —— bundle patch
+#
+# 一行同时挂起两半：
+#   - 宿主半（index.js）：注册 dialogErrors 会话投影，把会话日志里的错误折叠成
+#     「按签名合并、带次数」的小状态；另有只读诊断路由。
+#   - 客户端半（lib/client.js）：侧栏「错误汇总」面板，跨会话合并排序，提供
+#     「分析」「防范」两个按钮，一键开启新对话并预填提示词。
+#
+# 客户端半的模块图顺序由 package.json 的 dsh.client.inject 声明，这里不重复。
+- insert:
+    - id: error-digest
+      name: dsh-error-digest

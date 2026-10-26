@@ -1,0 +1,7 @@
+# 临时文件与构建中间产物
+.tmp/
+node_modules/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
