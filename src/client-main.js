@@ -37,6 +37,14 @@ const NS = 'errorDigest'
 const PANEL_ORDER = 20
 
 /**
+ * 「已忽略」的 localStorage 键。
+ *
+ * 带 `-v1` 后缀：忽略表的形状一旦变化就换键，旧数据自动作废，不需要写迁移代码。
+ * 忽略是**本机偏好**，不进会话日志、不上云——换台机器就该重新判断。
+ */
+const IGNORED_KEY = `${PLUGIN_ID}/ignored-v1`
+
+/**
  * 硬依赖：插槽与文案是注册界面的前提；`uiWorkspace` 是「新建对话」的通路，
  * `layout` 用来在发起动作前先切回对话面板。
  *
@@ -98,6 +106,20 @@ const ZH = {
   'source.unknown': '未知来源',
   'action.done': '已开启新对话，提示词已填入输入框',
   'action.failed': '无法开启新对话，提示词已复制到剪贴板',
+  'action.ignore': '忽略',
+  'action.ignore.title': '不再显示这条错误（只影响本机，可在下方「已忽略」里恢复）',
+  'ignored.title': '已忽略',
+  'ignored.count': '{count} 条',
+  'ignored.show': '已忽略 {count} 条',
+  'ignored.hide': '收起已忽略（{count} 条）',
+  'ignored.toggle.title': '查看 / 收起被忽略的错误',
+  'ignored.restore': '恢复',
+  'ignored.restore.title': '把这条错误重新放回列表',
+  'ignored.restoreAll': '全部恢复',
+  'ignored.restoreAll.title': '恢复所有被忽略的错误',
+  'ignored.at': '忽略于 {time}',
+  'empty.allIgnored.title': '当前列表里的错误都被忽略了',
+  'empty.allIgnored.body': '展开下方「已忽略」可以逐条恢复，或直接点「全部恢复」。',
   'prompt.analyze': [
     '请分析下面这条在 DSH 对话中反复出现的错误，输出：',
     '1) 根因判断（区分是提示词/工具契约/环境依赖/代码问题）；',
@@ -169,6 +191,20 @@ const EN = {
   'source.unknown': 'Unknown source',
   'action.done': 'New conversation opened with the prompt in the composer',
   'action.failed': 'Could not open a new conversation; the prompt was copied to the clipboard',
+  'action.ignore': 'Ignore',
+  'action.ignore.title': 'Stop showing this error (local only; restore it from "Ignored" below)',
+  'ignored.title': 'Ignored',
+  'ignored.count': '{count}',
+  'ignored.show': 'Ignored ({count})',
+  'ignored.hide': 'Hide ignored ({count})',
+  'ignored.toggle.title': 'Show or hide the errors you ignored',
+  'ignored.restore': 'Restore',
+  'ignored.restore.title': 'Put this error back into the list',
+  'ignored.restoreAll': 'Restore all',
+  'ignored.restoreAll.title': 'Restore every ignored error',
+  'ignored.at': 'ignored {time}',
+  'empty.allIgnored.title': 'Every error in this view is ignored',
+  'empty.allIgnored.body': 'Expand "Ignored" below to restore them one by one, or use "Restore all".',
   'prompt.analyze': [
     'Analyze this error that keeps recurring in DSH conversations and report:',
     '1) the root cause (prompt vs. tool contract vs. environment/dependency vs. code);',
@@ -278,6 +314,133 @@ function createListStore() {
       }
     },
   }
+}
+
+/**
+ * 读取 localStorage 里的 JSON；任何异常都回落到默认值。
+ *
+ * 隐私模式、配额超限、被策略禁用都会让 localStorage 直接抛错——这类失败只记日志，
+ * 绝不能让「记住我忽略过哪条错误」这种小事把面板拖黑。
+ * @param {string} key 存储键。
+ * @param {unknown} fallback 默认值。
+ * @returns {unknown} 解析结果或默认值。
+ */
+function readJson(key, fallback) {
+  try {
+    if (typeof localStorage === 'undefined') return fallback
+    const raw = localStorage.getItem(key)
+    if (raw === null || raw === '') return fallback
+    const value = JSON.parse(raw)
+    return value === null || value === undefined ? fallback : value
+  } catch (error) {
+    console.warn(`[${PLUGIN_ID}] 读取 ${key} 失败，使用默认值`, error)
+    return fallback
+  }
+}
+
+/**
+ * 写入 localStorage 里的 JSON；失败只记日志。
+ * @param {string} key 存储键。
+ * @param {unknown} value 待写入值。
+ * @returns {void}
+ */
+function writeJson(key, value) {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch (error) {
+    console.warn(`[${PLUGIN_ID}] 写入 ${key} 失败`, error)
+  }
+}
+
+/**
+ * 造一个「本地偏好」仓库：内存快照 + localStorage 落盘 + 订阅通知。
+ *
+ * 用于「已忽略」，也够以后扩展其它本地偏好（排序、口径）。快照引用必须稳定
+ * （只有真的变了才换新对象），否则 `useSyncExternalStore` 会无限重渲染。
+ * @param {string} storageKey localStorage 键。
+ * @param {(value: unknown) => object} normalize 归一化函数（也负责校验脏数据）。
+ * @param {string} label 日志标签。
+ * @returns {{ get: () => object, set: (next: object) => object,
+ *   getSnapshot: () => object, subscribe: (listener: () => void) => () => void }} 仓库。
+ */
+function createPreferenceStore(storageKey, normalize, label) {
+  /** 当前快照。 */
+  let value = normalize(readJson(storageKey, {}))
+  /** 订阅者。 */
+  const listeners = new Set()
+
+  return {
+    /** @returns {object} 当前值（只读）。 */
+    get() {
+      return value
+    },
+    /**
+     * 替换当前值：归一化 → 无变化则不通知 → 落盘 → 通知。
+     * @param {object} next 新值。
+     * @returns {object} 归一化后的值。
+     */
+    set(next) {
+      const normalized = normalize(next)
+      if (normalized === value) return value
+      value = normalized
+      writeJson(storageKey, value)
+      for (const listener of [...listeners]) {
+        try {
+          listener()
+        } catch (error) {
+          console.warn(`[${PLUGIN_ID}] ${label}订阅者抛错`, error)
+        }
+      }
+      return value
+    },
+    /** @returns {object} 当前快照（`useSyncExternalStore` 用）。 */
+    getSnapshot() {
+      return value
+    },
+    /**
+     * 订阅变化。
+     * @param {() => void} listener 订阅者。
+     * @returns {() => void} 取消订阅。
+     */
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+  }
+}
+
+/**
+ * 归一化「已忽略」表。
+ *
+ * 输入可能来自旧版本、被手改过的 localStorage、或其它标签页写坏的 JSON，
+ * 所以逐条校验并丢弃非法项；超过上限时保留最近忽略的那些。
+ * @param {unknown} value 原始值。
+ * @returns {object} `sig → 记录`。
+ */
+function normalizeIgnored(value) {
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const entries = []
+  for (const [sig, record] of Object.entries(source)) {
+    if (typeof sig !== 'string' || sig === '') continue
+    if (record === null || typeof record !== 'object') continue
+    entries.push([sig, {
+      at: Number.isFinite(record.at) ? record.at : 0,
+      kind: typeof record.kind === 'string' ? record.kind : 'unknown',
+      key: typeof record.key === 'string' ? record.key : '',
+      code: typeof record.code === 'string' ? record.code : '',
+      detail: typeof record.detail === 'string' ? record.detail : '',
+      count: Number.isInteger(record.count) && record.count > 0 ? record.count : 0,
+      lastTime: Number.isFinite(record.lastTime) ? record.lastTime : 0,
+    }])
+  }
+  entries.sort((left, right) => (right[1].at ?? 0) - (left[1].at ?? 0))
+  const kept = entries.slice(0, MAX_IGNORED)
+  const result = {}
+  for (const [sig, record] of kept) result[sig] = record
+  return result
 }
 
 /**
@@ -482,6 +645,38 @@ function apply(ctx) {
     return true
   }
 
+  // ---- 已忽略（本机偏好，落 localStorage） ----
+  //
+  // 忽略不是「删除」：错误仍然在会话日志里、仍然被投影统计，只是不在本机这个面板里出现。
+  // 因此它是纯客户端偏好，且必须可恢复——所以才有一个可展开的「已忽略」区块。
+  const ignoredStore = createPreferenceStore(IGNORED_KEY, normalizeIgnored, '已忽略表')
+
+  /**
+   * 忽略一条错误。
+   * @param {object} row 合并后的行。
+   * @returns {void}
+   */
+  const onIgnore = (row) => {
+    ignoredStore.set(withIgnored(ignoredStore.get(), row, Date.now()))
+  }
+
+  /**
+   * 恢复一条被忽略的错误。
+   * @param {string} sig 签名。
+   * @returns {void}
+   */
+  const onRestore = (sig) => {
+    ignoredStore.set(withoutIgnored(ignoredStore.get(), sig))
+  }
+
+  /**
+   * 恢复全部被忽略的错误。
+   * @returns {void}
+   */
+  const onRestoreAll = () => {
+    ignoredStore.set({})
+  }
+
   // ---- 插槽：主面板 + 侧栏图标 ----
   const React = typeof require === 'function' ? require('react') : null
   if (React === null || typeof React.createElement !== 'function') {
@@ -489,7 +684,15 @@ function apply(ctx) {
     return
   }
 
-  const DigestPanel = createDigestPanel(React, { store, onAction, fallbackT: boundT })
+  const DigestPanel = createDigestPanel(React, {
+    store,
+    ignored: ignoredStore,
+    onAction,
+    onIgnore,
+    onRestore,
+    onRestoreAll,
+    fallbackT: boundT,
+  })
   const DigestIcon = createDigestIcon(React)
 
   ctx.slots.inject('main', () => ctx.slots.register({
@@ -552,6 +755,18 @@ function apply(ctx) {
     flushActions: () => flushPendingActions(),
     /** 当前「当前对话」会话 id（排障用）。 */
     currentSessionId: () => currentSessionIdOf(store.getSnapshot()),
+    /** 已忽略条数（排障用）。 */
+    ignoredCount: () => Object.keys(ignoredStore.get()).length,
+    /** 已忽略的签名列表（排障用）。 */
+    ignoredSigs: () => Object.keys(ignoredStore.get()),
+    /**
+     * 清空忽略表（排障用）。
+     * @returns {number} 清空后的条数（0）。
+     */
+    restoreAllIgnored: () => {
+      onRestoreAll()
+      return Object.keys(ignoredStore.get()).length
+    },
     /** 最近一次按钮动作的结果（排障用）：`{ mode, opened, reason, promptLength }`。 */
     lastAction: () => lastAction,
     /** 「新建对话」通路是否可见（排障用）。 */

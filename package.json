@@ -1,6 +1,6 @@
 {
   "name": "dsh-error-digest",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "DSH 对话错误汇总：折叠会话日志里的工具失败、回合失败与模型重试，跨会话合并后按出现频次排序，每条错误可一键开启「分析」或「防范」对话",

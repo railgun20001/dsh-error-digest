@@ -37,6 +37,12 @@ export const MERGED_ROW_LIMIT = 200
 /** 每行最多记录多少个来源会话（其余折成「还有 N 个」）。 */
 export const MERGED_SESSION_SAMPLE = 12
 
+/** 最多记住多少个「已忽略」的签名（超出时丢掉最早忽略的）。 */
+export const MAX_IGNORED = 200
+
+/** 「已忽略」记录里摘要的保存长度：只需要够认出是哪条错误。 */
+const IGNORED_DETAIL_LIMIT = 240
+
 /**
  * 从会话列表快照里取某个会话的投影值。
  *
@@ -263,4 +269,119 @@ export function buildPrompt(row, mode, t, extra = {}) {
     lastSeen: typeof extra.lastSeen === 'string' && extra.lastSeen !== '' ? extra.lastSeen : '-',
     detail: typeof row?.detail === 'string' && row.detail !== '' ? row.detail : t('detail.empty'),
   })
+}
+
+/* ------------------------------------------------------------------ *
+ * 忽略（ignored）
+ *
+ * 忽略是**纯客户端的本地偏好**：用户说「这条我看过了/不重要」，不该改会话日志、
+ * 也不该影响别的机器。因此它只存在本机 localStorage 里，按签名（`sig`）记账，
+ * 并且必须可恢复——「忽略」有机会成本，做成不可逆就等于数据丢失。
+ *
+ * 记录里连摘要一起存：错误消失之后（会话被归档、日志被压缩），「已忽略」列表里
+ * 仍然能认出当初忽略的是哪一条。
+ * ------------------------------------------------------------------ */
+
+/**
+ * 把一行错误压成「已忽略」记录。
+ * @param {object} row 合并后的行。
+ * @param {number} now 记录时间（epoch 毫秒）。
+ * @returns {object} 忽略记录。
+ */
+export function ignoredRecordOf(row, now) {
+  const detail = typeof row?.detail === 'string' ? row.detail : ''
+  return {
+    at: Number.isFinite(now) ? now : Date.now(),
+    kind: typeof row?.kind === 'string' ? row.kind : 'unknown',
+    key: typeof row?.key === 'string' ? row.key : '',
+    code: typeof row?.code === 'string' ? row.code : '',
+    detail: detail.length > IGNORED_DETAIL_LIMIT ? `${detail.slice(0, IGNORED_DETAIL_LIMIT - 1)}…` : detail,
+    count: Number.isInteger(row?.count) && row.count > 0 ? row.count : 0,
+    lastTime: Number.isFinite(row?.lastTime) ? row.lastTime : 0,
+  }
+}
+
+/**
+ * 追加一条忽略记录（纯函数）。
+ *
+ * 超过 {@link MAX_IGNORED} 时丢掉**最早**忽略的那条：用户的注意力总在最近的决定上，
+ * 而且旧记录对应的错误很可能早就不出现了。
+ * @param {object} ignored 现有忽略表（`sig → 记录`）。
+ * @param {object} row 要忽略的行。
+ * @param {number} now 记录时间。
+ * @returns {object} 新的忽略表。
+ */
+export function withIgnored(ignored, row, now) {
+  const sig = typeof row?.sig === 'string' ? row.sig : ''
+  if (sig === '') return ignored !== null && typeof ignored === 'object' ? ignored : {}
+  const base = ignored !== null && typeof ignored === 'object' ? { ...ignored } : {}
+  base[sig] = ignoredRecordOf(row, now)
+  const sigs = Object.keys(base)
+  if (sigs.length > MAX_IGNORED) {
+    sigs
+      .sort((left, right) => (base[left]?.at ?? 0) - (base[right]?.at ?? 0))
+      .slice(0, sigs.length - MAX_IGNORED)
+      .forEach((oldSig) => { delete base[oldSig] })
+  }
+  return base
+}
+
+/**
+ * 去掉一条忽略记录（纯函数）。
+ * @param {object} ignored 现有忽略表。
+ * @param {string} sig 签名。
+ * @returns {object} 新的忽略表。
+ */
+export function withoutIgnored(ignored, sig) {
+  const base = ignored !== null && typeof ignored === 'object' ? { ...ignored } : {}
+  if (typeof sig === 'string' && sig !== '') delete base[sig]
+  return base
+}
+
+/**
+ * 把合并后的行分成「要展示的」与「已忽略的」。
+ * @param {object[]} rows 合并后的行（已排序）。
+ * @param {object} ignored 忽略表（`sig → 记录`）。
+ * @returns {{ visible: object[], ignored: object[] }} 展示行与已忽略行（后者按忽略时间倒序）。
+ */
+export function partitionRows(rows, ignored) {
+  const table = ignored !== null && typeof ignored === 'object' && !Array.isArray(ignored) ? ignored : {}
+  const visible = []
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row !== null && typeof row === 'object' && Object.hasOwn(table, row.sig)) continue
+    visible.push(row)
+  }
+  const hidden = Object.keys(table)
+    .map((sig) => {
+      const record = table[sig] !== null && typeof table[sig] === 'object' ? table[sig] : {}
+      return {
+        sig,
+        kind: typeof record.kind === 'string' ? record.kind : 'unknown',
+        key: typeof record.key === 'string' ? record.key : '',
+        code: typeof record.code === 'string' ? record.code : '',
+        detail: typeof record.detail === 'string' ? record.detail : '',
+        count: Number.isInteger(record.count) && record.count > 0 ? record.count : 0,
+        lastTime: Number.isFinite(record.lastTime) ? record.lastTime : 0,
+        at: Number.isFinite(record.at) ? record.at : 0,
+        sessionCount: 0,
+        sessions: [],
+        ignored: true,
+      }
+    })
+    .sort((left, right) => right.at - left.at)
+  return { visible, ignored: hidden }
+}
+
+/**
+ * 统计一组行的「类数 / 总次数」：用于面板标题，口径必须与列表一致。
+ * @param {object[]} rows 行。
+ * @returns {{ distinct: number, total: number }} 统计结果。
+ */
+export function summarizeRows(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  let total = 0
+  for (const row of list) {
+    if (Number.isInteger(row?.count) && row.count > 0) total += row.count
+  }
+  return { distinct: list.length, total }
 }

@@ -15,12 +15,18 @@ import {
 } from '../src/digest-fold.js'
 import {
   DIGEST_PROJECTION_KEY,
+  MAX_IGNORED,
   buildPrompt,
   collectDigestRows,
   currentSessionIdOf,
+  ignoredRecordOf,
   kindLabelKey,
+  partitionRows,
   sessionTitleOf,
   sourceLabelOf,
+  summarizeRows,
+  withIgnored,
+  withoutIgnored,
 } from '../src/digest-model.js'
 
 /**
@@ -205,4 +211,82 @@ test('分析 / 防范提示词带上关键事实，且两者目标不同', () =>
 test('摘要为空时用占位文案，不产出空行', () => {
   const t = translator({ 'detail.empty': '（没有可读的错误信息）', 'prompt.analyze': '{detail}' })
   assert.equal(buildPrompt({ kind: 'turn' }, 'analyze', t), '（没有可读的错误信息）')
+})
+
+/* ------------------------------ 忽略 ------------------------------ */
+
+test('忽略记录保留认出这条错误所需的字段', () => {
+  const row = { sig: 's1', kind: 'tool', key: 'edit', code: 'E', detail: '未找到匹配', count: 4, lastTime: 1234 }
+  const record = ignoredRecordOf(row, 5000)
+  assert.deepEqual(record, {
+    at: 5000,
+    kind: 'tool',
+    key: 'edit',
+    code: 'E',
+    detail: '未找到匹配',
+    count: 4,
+    lastTime: 1234,
+  })
+  // 摘要过长时截断，避免忽略表被长错误文本撑大
+  const long = ignoredRecordOf({ sig: 's2', detail: 'x'.repeat(400) }, 1)
+  assert.ok(long.detail.length <= 240)
+  assert.match(long.detail, /…$/)
+})
+
+test('withIgnored 追加记录且不修改入参', () => {
+  const base = {}
+  const row = { sig: 'a', kind: 'tool', key: 'edit', code: 'E', detail: 'd', count: 1, lastTime: 1 }
+  const next = withIgnored(base, row, 100)
+  assert.deepEqual(base, {})
+  assert.equal(Object.keys(next).length, 1)
+  assert.equal(next.a.at, 100)
+  // 无 sig 的行不会污染忽略表
+  assert.equal(Object.keys(withIgnored(next, { kind: 'tool' }, 200)).length, 1)
+})
+
+test('忽略表有上限，超出时保留最近忽略的', () => {
+  let table = {}
+  for (let index = 0; index < MAX_IGNORED + 5; index += 1) {
+    table = withIgnored(table, { sig: `sig-${index}`, kind: 'tool', detail: `e${index}` }, index + 1)
+  }
+  assert.equal(Object.keys(table).length, MAX_IGNORED)
+  assert.equal(Object.hasOwn(table, 'sig-0'), false)
+  assert.equal(Object.hasOwn(table, `sig-${MAX_IGNORED + 4}`), true)
+})
+
+test('withoutIgnored 只删指定签名', () => {
+  const table = withIgnored(withIgnored({}, { sig: 'a', detail: 'A' }, 1), { sig: 'b', detail: 'B' }, 2)
+  const next = withoutIgnored(table, 'a')
+  assert.deepEqual(Object.keys(next), ['b'])
+  assert.deepEqual(Object.keys(table).sort(), ['a', 'b'])
+  assert.deepEqual(withoutIgnored(table, 'nope'), table)
+})
+
+test('partitionRows 把已忽略的挑出来，并按忽略时间倒序', () => {
+  const rows = [
+    { sig: 'a', kind: 'tool', count: 5, detail: 'A', sessionCount: 2, sessions: [], lastTime: 10 },
+    { sig: 'b', kind: 'model', count: 3, detail: 'B', sessionCount: 1, sessions: [], lastTime: 20 },
+    { sig: 'c', kind: 'turn', count: 1, detail: 'C', sessionCount: 1, sessions: [], lastTime: 30 },
+  ]
+  const table = { b: { at: 100, kind: 'model', key: 'p', code: 'X', detail: 'B', count: 3, lastTime: 20 }, a: { at: 200, kind: 'tool', key: 'edit', code: 'Y', detail: 'A', count: 5, lastTime: 10 } }
+  const { visible, ignored } = partitionRows(rows, table)
+  assert.deepEqual(visible.map((row) => row.sig), ['c'])
+  assert.deepEqual(ignored.map((row) => row.sig), ['a', 'b'])
+  assert.equal(ignored[0].ignored, true)
+  assert.equal(ignored[0].detail, 'A')
+  // 脏数据不崩：空/非法忽略表等价于「没忽略任何东西」
+  assert.equal(partitionRows(rows, null).visible.length, 3)
+  assert.equal(partitionRows(rows, []).visible.length, 3)
+  assert.equal(partitionRows(undefined, {}).visible.length, 0)
+})
+
+test('summarizeRows 的口径与列表一致（忽略后统计随之变小）', () => {
+  const rows = [
+    { sig: 'a', count: 5 },
+    { sig: 'b', count: 3 },
+  ]
+  assert.deepEqual(summarizeRows(rows), { distinct: 2, total: 8 })
+  const { visible } = partitionRows(rows, { a: { at: 1 } })
+  assert.deepEqual(summarizeRows(visible), { distinct: 1, total: 3 })
+  assert.deepEqual(summarizeRows(undefined), { distinct: 0, total: 0 })
 })
