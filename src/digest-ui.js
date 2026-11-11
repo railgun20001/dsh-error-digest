@@ -685,7 +685,7 @@ function createDigestPanel(React, deps) {
  * 造侧栏面板图标。
  *
  * 侧栏只给 `{ size, active }`：颜色必须走 `currentColor`，选中态与主题才会自动生效。
- * 图形语义：三条由长到短的横条（频次排名）+ 右上角错误点。
+ * 图形语义：三条由长到短的横条（频次排名）；不带错误红点，避免侧栏常驻告警噪音。
  * @param {object} React React 命名空间。
  * @returns {(props: object) => object} React 组件。
  */
@@ -705,7 +705,6 @@ function createDigestIcon(React) {
       h('rect', { key: 'r1', x: 3, y: 8, width: 15, height: 2.4, rx: 1.2, fill: 'currentColor' }),
       h('rect', { key: 'r2', x: 3, y: 12.6, width: 11, height: 2.4, rx: 1.2, fill: 'currentColor', opacity: 0.7 }),
       h('rect', { key: 'r3', x: 3, y: 17.2, width: 7, height: 2.4, rx: 1.2, fill: 'currentColor', opacity: 0.45 }),
-      h('circle', { key: 'dot', cx: 19, cy: 5.5, r: 3.2, fill: 'var(--dsw-alias-state-error-primary, currentColor)' }),
     ])
   }
 }
