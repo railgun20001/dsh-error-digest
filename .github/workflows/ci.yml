@@ -1,0 +1,31 @@
+# 持续集成：客户端 bundle 与源码一致 + 单元测试。
+#
+# 为什么跑 npm run check：这个插件的客户端半是打包产物（lib/client.js 由 src/ 生成），
+# 只跑测试而不校验产物，会出现「测试绿、发出去的包是旧代码」。check 先 --check 再跑测试。
+# 无依赖需要安装：零运行时依赖、零开发依赖，测试只用 node:test。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 安装 Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: 校验 bundle 与源码一致并跑全部用例
+        run: npm run check
