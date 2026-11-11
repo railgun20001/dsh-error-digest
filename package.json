@@ -1,9 +1,8 @@
 {
   "name": "dsh-error-digest",
   "version": "0.2.0",
-  "private": true,
-  "type": "module",
   "description": "DSH 对话错误汇总：折叠会话日志里的工具失败、回合失败与模型重试，跨会话合并后按出现频次排序，每条错误可一键开启「分析」或「防范」对话",
+  "type": "module",
   "main": "index.js",
   "exports": {
     ".": {
@@ -32,6 +31,32 @@
     "test": "node --test test/digest-fold-test.mjs test/digest-model-test.mjs test/bundle-test.mjs test/client-half-test.mjs",
     "check": "node build/bundle.mjs --check && node --test test/digest-fold-test.mjs test/digest-model-test.mjs test/bundle-test.mjs test/client-half-test.mjs"
   },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "error-digest",
+    "errors",
+    "diagnostics",
+    "agent"
+  ],
+  "author": "railgun20001",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/railgun20001/dsh-error-digest.git"
+  },
+  "homepage": "https://github.com/railgun20001/dsh-error-digest#readme",
+  "bugs": {
+    "url": "https://github.com/railgun20001/dsh-error-digest/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -48,9 +73,5 @@
       ]
     },
     "manifestVersion": 1
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "license": "MIT"
+  }
 }
