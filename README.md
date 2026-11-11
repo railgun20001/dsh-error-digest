@@ -14,6 +14,16 @@
 
 打开方式：左侧栏底部的面板图标「错误汇总」。
 
+## 安装
+
+```bash
+npm install dsh-error-digest
+```
+
+- 包内 `dsh` 字段声明了插件两半：`bundle.patch`（宿主半，向投影写入错误账本）与 `client`（侧栏面板的客户端半）；
+- `exports` 另外暴露 `./client`（构建好的 `lib/client.js`）、`./locale/*.json`、`./icon` 与 `./package.json`，均无需二次构建；
+- 仓库：<https://github.com/railgun20001/dsh-error-digest>
+
 ## 忽略
 
 - 忽略是**本机偏好**：存在 `localStorage` 的 `dsh-error-digest/ignored-v1`，按签名记账，
